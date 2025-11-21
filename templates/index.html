@@ -8,65 +8,157 @@
      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
      crossorigin=""/>
     <style>
-        body { margin: 0; padding: 0; display: flex; flex-direction: row; height: 100vh; }
-        #sidebar { width: 300px; background: #f8f9fa; padding: 15px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
-        #map { flex-grow: 1; }
-        h3 { margin: 0 0 10px 0; font-size: 1.2em; color: #333; }
-        .control-group { border-bottom: 1px solid #ddd; padding-bottom: 15px; }
-        button { width: 100%; padding: 8px; margin-top: 5px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
-        button:hover { background-color: #0056b3; }
-        button.secondary { background-color: #6c757d; }
-        button.secondary:hover { background-color: #5a6268; }
-        button.danger { background-color: #dc3545; }
-        button.danger:hover { background-color: #c82333; }
-        input[type="number"] { width: 100%; padding: 5px; margin-top: 5px; box-sizing: border-box; }
-        .status { font-size: 0.9em; color: #666; margin-top: 5px; }
-        .legend { font-size: 0.8em; display: flex; gap: 10px; align-items: center; }
-        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        :root {
+            --bg-color: #1e1e2e;
+            --panel-bg: rgba(30, 30, 46, 0.95);
+            --text-color: #e0e0e0;
+            --accent-color: #00d2ff;
+            --success-color: #00ff88;
+            --danger-color: #ff4757;
+            --border-color: #3f3f4f;
+        }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background: var(--bg-color); color: var(--text-color); overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        
+        /* Main Dashboard Container */
+        #dashboard-container {
+            display: flex;
+            width: 95vw; /* Use viewport width */
+            height: 95vh; /* Use viewport height */
+            background: rgba(30, 30, 46, 0.8);
+            border-radius: 15px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            overflow: hidden;
+        }
+
+        /* Floating Sidebar - now integrated into dashboard layout */
+        #sidebar {
+            flex: 0 0 350px; /* Fixed width for sidebar */
+            max-height: 100%;
+            background: var(--panel-bg);
+            /* backdrop-filter: blur(10px); */ /* Removed for solid integration */
+            padding: 25px;
+            border-right: 1px solid var(--border-color); /* Separator */
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-color) var(--panel-bg);
+            border-top-left-radius: 15px; /* Match container */
+            border-bottom-left-radius: 15px;
+        }
+
+        /* Map Container - now a component within the dashboard */
+        #map {
+            flex-grow: 1; /* Takes remaining space */
+            height: 100%;
+            border-top-right-radius: 15px; /* Match container */
+            border-bottom-right-radius: 15px;
+            z-index: 1; /* Below sidebar */
+        }
+        
+        /* Scrollbar */
+        #sidebar::-webkit-scrollbar { width: 6px; }
+        #sidebar::-webkit-scrollbar-thumb { background-color: var(--accent-color); border-radius: 3px; }
+        
+        h3 { margin: 0 0 5px 0; font-size: 1.4em; color: var(--accent-color); text-transform: uppercase; letter-spacing: 1px; border-bottom: 2px solid var(--accent-color); padding-bottom: 10px; display: inline-block;}
+        h4 { margin: 10px 0 10px 0; font-size: 1.0em; color: #aab; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        h4::before { content: ''; display: block; width: 4px; height: 14px; background: var(--accent-color); border-radius: 2px; }
+
+        .control-group { background: rgba(255,255,255,0.03); padding: 15px; border-radius: 8px; border: 1px solid var(--border-color); }
+
+        /* Inputs & Selects */
+        input[type="number"], select {
+            width: 100%; padding: 10px; margin-top: 8px; box-sizing: border-box;
+            background: rgba(0,0,0,0.3); border: 1px solid var(--border-color);
+            color: white; border-radius: 4px; font-family: monospace; font-size: 1em;
+            transition: border-color 0.3s;
+        }
+        input[type="number"]:focus, select:focus { outline: none; border-color: var(--accent-color); }
+
+        /* Buttons */
+        button {
+            width: 100%; padding: 10px 15px; margin-top: 10px; cursor: pointer;
+            background: transparent; color: var(--accent-color);
+            border: 1px solid var(--accent-color); border-radius: 4px;
+            font-size: 0.9em; font-weight: 600; letter-spacing: 0.5px;
+            transition: all 0.3s ease; text-transform: uppercase;
+        }
+        button:hover { background: var(--accent-color); color: #1e1e2e; box-shadow: 0 0 15px rgba(0, 210, 255, 0.4); }
+        
+        button.secondary { color: #bbb; border-color: #777; }
+        button.secondary:hover { background: #777; color: white; box-shadow: none; }
+        
+        button.danger { color: var(--danger-color); border-color: var(--danger-color); }
+        button.danger:hover { background: var(--danger-color); color: white; box-shadow: 0 0 15px rgba(255, 71, 87, 0.4); }
+        
+        /* Toggle Button Active State */
+        button.active-mode { background: var(--success-color); border-color: var(--success-color); color: #1e1e2e; box-shadow: 0 0 15px rgba(0, 255, 136, 0.4); }
+
+        /* Labels & Checkboxes */
+        label { display: block; font-size: 0.9em; color: #ccc; margin-top: 8px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+        input[type="checkbox"] { accent-color: var(--accent-color); width: 16px; height: 16px; cursor: pointer; }
+
+        /* Status Log */
+        .status { font-size: 0.85em; color: #889; margin-top: 8px; }
+        #log {
+            background: #111; color: #0f0; font-family: 'Courier New', monospace;
+            padding: 10px; border: 1px solid #333; border-radius: 4px;
+            height: 120px; overflow-y: auto; font-size: 0.8em;
+            box-shadow: inset 0 0 10px rgba(0,0,0,0.8);
+        }
+        
+        /* Leaflet Overrides */
+        .leaflet-popup-content-wrapper { background: rgba(30, 30, 46, 0.9); color: white; backdrop-filter: blur(5px); border-radius: 8px; }
+        .leaflet-popup-tip { background: rgba(30, 30, 46, 0.9); }
     </style>
 </head>
 <body>
 
-<div id="sidebar">
-    <h3>控制面板</h3>
-    
-    <div class="control-group">
-        <h4>1. 停车点管理</h4>
-        <button id="toggle-spot-mode-btn">点击地图设定停车点: 关</button>
-        <button id="clear-spots-btn" class="danger">清空停车点</button>
-        <div id="spot-count" class="status">当前停车点: 0</div>
+<div id="dashboard-container">
+    <div id="sidebar">
+        <h3>控制面板</h3>
+        
+        <div class="control-group">
+            <h4>1. 停车点管理</h4>
+            <button id="toggle-spot-mode-btn">点击地图设定停车点: 关</button>
+            <button id="clear-spots-btn" class="danger">清空停车点</button>
+            <div id="spot-count" class="status">当前停车点: 0</div>
+        </div>
+
+        <div class="control-group">
+            <h4>2. 电力车管理</h4>
+            <label>添加数量: <input type="number" id="vehicle-count-input" value="1" min="1"></label>
+            <label>电力载荷: <input type="number" id="vehicle-capacity-input" value="100" min="10"></label>
+            <button id="add-vehicle-btn">添加电力车</button>
+            <button id="clear-vehicles-btn" class="danger">清空电力车</button>
+            <div id="vehicle-status" class="status">车辆: 0 (未调度)</div>
+        </div>
+
+        <div class="control-group">
+            <h4>3. 断电模拟</h4>
+            <button id="gen-outage-btn">生成断电概率热力图</button>
+            <label><input type="checkbox" id="show-outage-check" checked> 显示断电热力图</label>
+        </div>
+
+        <div class="control-group">
+            <h4>4. 智能调度</h4>
+            <label>算法模式:</label>
+            <select id="algo-mode" style="width:100%; padding: 5px;">
+                <option value="linear">贪心 + 直线距离 (快)</option>
+                <option value="api" disabled>贪心 + API路径 (暂未开放)</option>
+            </select>
+            <button id="optimize-btn">开始计算调度</button>
+            <label><input type="checkbox" id="show-support-check" checked> 显示支援热力图</label>
+        </div>
+        
+        <div id="log" class="status" style="white-space: pre-wrap; height: 100px; overflow-y: auto; border: 1px solid #ccc; padding: 5px;"></div>
     </div>
 
-    <div class="control-group">
-        <h4>2. 电力车管理</h4>
-        <label>添加数量: <input type="number" id="vehicle-count-input" value="1" min="1"></label>
-        <label>电力载荷: <input type="number" id="vehicle-capacity-input" value="100" min="10"></label>
-        <button id="add-vehicle-btn">添加电力车</button>
-        <button id="clear-vehicles-btn" class="danger">清空电力车</button>
-        <div id="vehicle-status" class="status">车辆: 0 (未调度)</div>
-    </div>
-
-    <div class="control-group">
-        <h4>3. 断电模拟</h4>
-        <button id="gen-outage-btn">生成断电概率热力图</button>
-        <label><input type="checkbox" id="show-outage-check" checked> 显示断电热力图</label>
-    </div>
-
-    <div class="control-group">
-        <h4>4. 智能调度</h4>
-        <label>算法模式:</label>
-        <select id="algo-mode" style="width:100%; padding: 5px;">
-            <option value="linear">贪心 + 直线距离 (快)</option>
-            <option value="api" disabled>贪心 + API路径 (暂未开放)</option>
-        </select>
-        <button id="optimize-btn">开始计算调度</button>
-        <label><input type="checkbox" id="show-support-check" checked> 显示支援热力图</label>
-    </div>
-    
-    <div id="log" class="status" style="white-space: pre-wrap; height: 100px; overflow-y: auto; border: 1px solid #ccc; padding: 5px;"></div>
+    <div id="map"></div>
 </div>
-
-<div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
@@ -106,7 +198,12 @@
     toggleSpotBtn.addEventListener('click', () => {
         isSpotMode = !isSpotMode;
         toggleSpotBtn.innerText = `点击地图设定停车点: ${isSpotMode ? '开' : '关'}`;
-        toggleSpotBtn.style.backgroundColor = isSpotMode ? '#28a745' : '#007bff';
+        // Toggle CSS class for tech style
+        if (isSpotMode) {
+            toggleSpotBtn.classList.add('active-mode');
+        } else {
+            toggleSpotBtn.classList.remove('active-mode');
+        }
     });
 
     map.on('click', (e) => {
@@ -133,15 +230,54 @@
     }
     
     function renderSpot(spot) {
+        // Check if this spot matches an existing layer to update it, or create new
+        // For simplicity, we clear and redraw all spots when assignments change, 
+        // OR we just keep the marker reference and update popup.
+        // Let's store marker reference in spot object for easy update.
+        
         const icon = L.divIcon({
             className: 'custom-div-icon',
             html: `<div style='background-color:blue; width:12px; height:12px; border-radius:50%; border:2px solid white;'></div>`,
             iconSize: [12, 12],
             iconAnchor: [6, 6]
         });
-        L.marker([spot.lat, spot.lng], {icon: icon})
-            .bindPopup(`<b>停车点 #${spot.id}</b>`)
+        
+        const marker = L.marker([spot.lat, spot.lng], {icon: icon})
             .addTo(spotLayer);
+            
+        spot.marker = marker; // Store ref
+        updateSpotPopup(spot, []); // Initial empty state
+    }
+
+    function updateSpotPopup(spot, assignedVehicles) {
+        let content = `<b>停车点 #${spot.id}</b><br>`;
+        if (assignedVehicles.length === 0) {
+            content += `<span style="color:gray">暂无车辆停放</span>`;
+            // Reset icon to default if needed
+            spot.marker.setIcon(L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style='background-color:blue; width:12px; height:12px; border-radius:50%; border:2px solid white;'></div>`,
+                iconSize: [12, 12], iconAnchor: [6, 6]
+            }));
+        } else {
+            content += `<b>当前停放: ${assignedVehicles.length} 辆</b><hr style="margin:5px 0">`;
+            let totalCap = 0;
+            content += `<div style="max-height:100px; overflow-y:auto; font-size:0.9em">`;
+            assignedVehicles.forEach(v => {
+                content += `🚗 车辆 #${v.id} (载荷: ${v.capacity})<br>`;
+                totalCap += v.capacity;
+            });
+            content += `</div>`;
+            content += `<hr style="margin:5px 0"><b>总支援能力: ${totalCap}</b>`;
+            
+            // Highlight marker
+            spot.marker.setIcon(L.divIcon({
+                className: 'custom-div-icon',
+                html: `<div style='background-color:#28a745; width:16px; height:16px; border-radius:50%; border:2px solid white; box-shadow: 0 0 5px black;'></div>`,
+                iconSize: [16, 16], iconAnchor: [8, 8]
+            }));
+        }
+        spot.marker.bindPopup(content);
     }
 
     function updateSpotCount() {
@@ -211,8 +347,14 @@
     function drawOutageHeatmap(points) {
         if (outageHeatLayer) map.removeLayer(outageHeatLayer);
         // Format: [lat, lng, intensity]
-        // Leaflet.heat uses [lat, lng, intensity]
-        outageHeatLayer = L.heatLayer(points, {radius: 40, blur: 30, maxZoom: 13, gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}});
+        // max: 1.5 allows some accumulation before turning red.
+        outageHeatLayer = L.heatLayer(points, {
+            radius: 35, 
+            blur: 25, 
+            max: 1.0, 
+            maxZoom: 13, 
+            gradient: {0.2: 'blue', 0.5: 'lime', 1: 'red'}
+        });
         
         if(document.getElementById('show-outage-check').checked) {
             outageHeatLayer.addTo(map);
@@ -252,14 +394,36 @@
     });
 
     function applyAssignments(assignments) {
-        // Visual feedback: markers turn green or show vehicle info
-        // Clear old markers and redraw with vehicle counts?
-        // For now, let's just update the log and maybe popup content
+        // assignments: {vehicle_id: spot_id, ...}
         let assignedCount = Object.keys(assignments).length;
         vehicleStatusEl.innerText = `车辆: ${vehicles.length} (已调度 ${assignedCount})`;
         
+        // Group vehicles by spot
+        const spotVehicles = {}; // spot_id -> [vehicle_obj, ...]
+        
+        // Initialize for all spots
+        parkingSpots.forEach(s => spotVehicles[s.id] = []);
+        
+        // Fill with assignment data
+        vehicles.forEach(v => {
+            if (assignments[v.id] !== undefined) {
+                const spotId = assignments[v.id];
+                if (spotVehicles[spotId]) {
+                    spotVehicles[spotId].push(v);
+                }
+            }
+        });
+        
+        // Update all spot markers
+        let spotsWithCars = 0;
+        parkingSpots.forEach(spot => {
+            const vs = spotVehicles[spot.id] || [];
+            updateSpotPopup(spot, vs);
+            if (vs.length > 0) spotsWithCars++;
+        });
+        
         // Show simple summary
-        log(`已分配 ${assignedCount} 辆车到停车点`);
+        log(`调度完成: ${assignedCount} 辆车已分配到 ${spotsWithCars} 个停车点`);
     }
 
     function loadSupportHeatmap() {
@@ -274,8 +438,11 @@
         if (supportHeatLayer) map.removeLayer(supportHeatLayer);
         // Different color gradient for support (e.g., Yellow/Orange)
         supportHeatLayer = L.heatLayer(points, {
-            radius: 45, blur: 35, maxZoom: 13, 
-            gradient: {0.4: 'cyan', 0.6: 'yellow', 1: 'orange'}
+            radius: 40, 
+            blur: 30, 
+            max: 1.0, 
+            maxZoom: 13, 
+            gradient: {0.2: 'cyan', 0.5: 'yellow', 1: 'orange'}
         });
         
         if(document.getElementById('show-support-check').checked) {

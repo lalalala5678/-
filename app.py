@@ -142,12 +142,16 @@ def generate_outage_heatmap():
     max_val = max([d['val'] for d in raw_data]) if raw_data else 1.0
     if max_val == 0: max_val = 1.0
     
-    # Third pass: Normalize and scale down
+    # Third pass: Normalize and scale dynamically based on grid density
+    # Heuristic: With higher density, we need lower intensity per point to avoid saturation.
+    # Factor = 2.0 / GRID_SIZE seems to work well for Leaflet heat (2.0 / 100 = 0.02, maybe too low? let's try 5.0/GRID_SIZE = 0.05)
+    # User reported 0.05 is too light. Let's try 10.0 / GRID_SIZE = 0.1 for GRID_SIZE=100
+    dynamic_scale = 15.0 / GRID_SIZE # Results in 0.15 for size 100
+    
     final_data = []
     for item in raw_data:
-        # Normalize to 0-1 then scale down by 0.6 to avoid visual saturation
-        normalized_val = (item['val'] / max_val) * 0.6 
-        if normalized_val > 0.01:
+        normalized_val = (item['val'] / max_val) * dynamic_scale
+        if normalized_val > 0.001:
              final_data.append([item['lat'], item['lng'], float(normalized_val)])
             
     outage_heatmap_data = final_data
@@ -306,13 +310,15 @@ def get_support_heatmap():
         
     # Format for heatmap [lat, lng, intensity]
     # Normalize to match outage intensity range roughly for visual comparison
-    # Scale down by 0.7 for visual balance with high density grid
+    # Dynamic scaling: 15.0 / GRID_SIZE (same as outage)
+    dynamic_scale = 15.0 / GRID_SIZE
+    
     if total_support.max() > 0:
-        total_support = (total_support / total_support.max()) * 0.7
+        total_support = (total_support / total_support.max()) * dynamic_scale
         
     data = []
     for i, val in enumerate(total_support):
-        if val > 0.01:
+        if val > 0.001:
             data.append([grid_points[i]['lat'], grid_points[i]['lng'], float(val)])
             
     return jsonify({'data': data})
