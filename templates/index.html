@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>石家庄路线规划</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+    <style>
+        body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        #map { flex-grow: 1; }
+        #controls { padding: 10px; background: #f8f9fa; display: flex; gap: 10px; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; }
+        button { padding: 8px 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        .info { font-family: sans-serif; }
+    </style>
+</head>
+<body>
+
+<div id="controls" class="info">
+    <div>
+        <span id="status-text">请在地图上点击选择<b>起点</b></span>
+    </div>
+    <button id="plan-btn" disabled>规划路径</button>
+    <button id="reset-btn">重置</button>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+<script>
+    // Initialize map centered on Shijiazhuang
+    const map = L.map('map').setView([38.0428, 114.5149], 12);
+
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    let startMarker = null;
+    let endMarker = null;
+    let routePolyline = null;
+
+    const statusText = document.getElementById('status-text');
+    const planBtn = document.getElementById('plan-btn');
+    const resetBtn = document.getElementById('reset-btn');
+
+    const startIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
+
+    const endIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
+
+    map.on('click', function(e) {
+        if (!startMarker) {
+            startMarker = L.marker(e.latlng, {icon: startIcon}).addTo(map).bindPopup("起点").openPopup();
+            statusText.innerHTML = "已选择起点，请点击选择<b>终点</b>";
+        } else if (!endMarker) {
+            endMarker = L.marker(e.latlng, {icon: endIcon}).addTo(map).bindPopup("终点").openPopup();
+            statusText.innerHTML = "起点和终点已就绪，请点击<b>规划路径</b>";
+            planBtn.disabled = false;
+        }
+    });
+
+    resetBtn.addEventListener('click', function() {
+        if (startMarker) map.removeLayer(startMarker);
+        if (endMarker) map.removeLayer(endMarker);
+        if (routePolyline) map.removeLayer(routePolyline);
+        startMarker = null;
+        endMarker = null;
+        routePolyline = null;
+        planBtn.disabled = true;
+        statusText.innerHTML = "请在地图上点击选择<b>起点</b>";
+    });
+
+    planBtn.addEventListener('click', function() {
+        if (!startMarker || !endMarker) return;
+
+        statusText.textContent = "正在规划路径...";
+        planBtn.disabled = true;
+
+        const origin = `${startMarker.getLatLng().lng.toFixed(6)},${startMarker.getLatLng().lat.toFixed(6)}`;
+        const destination = `${endMarker.getLatLng().lng.toFixed(6)},${endMarker.getLatLng().lat.toFixed(6)}`;
+
+        fetch('/plan_route', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ origin, destination }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (routePolyline) map.removeLayer(routePolyline);
+                
+                routePolyline = L.polyline(data.path, {color: 'blue', weight: 5}).addTo(map);
+                map.fitBounds(routePolyline.getBounds());
+                
+                const distKm = (parseInt(data.distance) / 1000).toFixed(1);
+                const durationMin = Math.ceil(parseInt(data.duration) / 60);
+                statusText.innerHTML = `规划成功! 距离: <b>${distKm} km</b>, 预计耗时: <b>${durationMin} 分钟</b>`;
+            } else {
+                statusText.textContent = "规划失败: " + (data.error || "未知错误");
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            statusText.textContent = "请求出错，请重试";
+        })
+        .finally(() => {
+            planBtn.disabled = false;
+        });
+    });
+</script>
+
+</body>
+</html>
