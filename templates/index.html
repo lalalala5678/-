@@ -3,131 +3,292 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>石家庄路线规划</title>
+    <title>电力车智能调度系统</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
      crossorigin=""/>
     <style>
-        body { margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
+        body { margin: 0; padding: 0; display: flex; flex-direction: row; height: 100vh; }
+        #sidebar { width: 300px; background: #f8f9fa; padding: 15px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
         #map { flex-grow: 1; }
-        #controls { padding: 10px; background: #f8f9fa; display: flex; gap: 10px; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); z-index: 1000; }
-        button { padding: 8px 16px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; font-size: 16px; }
+        h3 { margin: 0 0 10px 0; font-size: 1.2em; color: #333; }
+        .control-group { border-bottom: 1px solid #ddd; padding-bottom: 15px; }
+        button { width: 100%; padding: 8px; margin-top: 5px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; }
         button:hover { background-color: #0056b3; }
-        button:disabled { background-color: #ccc; cursor: not-allowed; }
-        .info { font-family: sans-serif; }
+        button.secondary { background-color: #6c757d; }
+        button.secondary:hover { background-color: #5a6268; }
+        button.danger { background-color: #dc3545; }
+        button.danger:hover { background-color: #c82333; }
+        input[type="number"] { width: 100%; padding: 5px; margin-top: 5px; box-sizing: border-box; }
+        .status { font-size: 0.9em; color: #666; margin-top: 5px; }
+        .legend { font-size: 0.8em; display: flex; gap: 10px; align-items: center; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     </style>
 </head>
 <body>
 
-<div id="controls" class="info">
-    <div>
-        <span id="status-text">请在地图上点击选择<b>起点</b></span>
+<div id="sidebar">
+    <h3>控制面板</h3>
+    
+    <div class="control-group">
+        <h4>1. 停车点管理</h4>
+        <button id="toggle-spot-mode-btn">点击地图设定停车点: 关</button>
+        <button id="clear-spots-btn" class="danger">清空停车点</button>
+        <div id="spot-count" class="status">当前停车点: 0</div>
     </div>
-    <button id="plan-btn" disabled>规划路径</button>
-    <button id="reset-btn">重置</button>
+
+    <div class="control-group">
+        <h4>2. 电力车管理</h4>
+        <label>添加数量: <input type="number" id="vehicle-count-input" value="1" min="1"></label>
+        <label>电力载荷: <input type="number" id="vehicle-capacity-input" value="100" min="10"></label>
+        <button id="add-vehicle-btn">添加电力车</button>
+        <button id="clear-vehicles-btn" class="danger">清空电力车</button>
+        <div id="vehicle-status" class="status">车辆: 0 (未调度)</div>
+    </div>
+
+    <div class="control-group">
+        <h4>3. 断电模拟</h4>
+        <button id="gen-outage-btn">生成断电概率热力图</button>
+        <label><input type="checkbox" id="show-outage-check" checked> 显示断电热力图</label>
+    </div>
+
+    <div class="control-group">
+        <h4>4. 智能调度</h4>
+        <label>算法模式:</label>
+        <select id="algo-mode" style="width:100%; padding: 5px;">
+            <option value="linear">贪心 + 直线距离 (快)</option>
+            <option value="api" disabled>贪心 + API路径 (暂未开放)</option>
+        </select>
+        <button id="optimize-btn">开始计算调度</button>
+        <label><input type="checkbox" id="show-support-check" checked> 显示支援热力图</label>
+    </div>
+    
+    <div id="log" class="status" style="white-space: pre-wrap; height: 100px; overflow-y: auto; border: 1px solid #ccc; padding: 5px;"></div>
 </div>
+
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
      crossorigin=""></script>
-<script>
-    // Initialize map centered on Shijiazhuang
-    const map = L.map('map').setView([38.0428, 114.5149], 12);
+<!-- Leaflet Heatmap Plugin -->
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
 
+<script>
+    const map = L.map('map').setView([38.0428, 114.5149], 12);
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        maxZoom: 19, attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    let startMarker = null;
-    let endMarker = null;
-    let routePolyline = null;
+    // Layers
+    const spotLayer = L.layerGroup().addTo(map);
+    let outageHeatLayer = null;
+    let supportHeatLayer = null;
 
-    const statusText = document.getElementById('status-text');
-    const planBtn = document.getElementById('plan-btn');
-    const resetBtn = document.getElementById('reset-btn');
+    // State
+    let isSpotMode = false;
+    let parkingSpots = [];
+    let vehicles = [];
 
-    const startIcon = new L.Icon({
-        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
-        popupAnchor: [1, -34],
-        shadowSize: [41, 41]
+    // UI Elements
+    const toggleSpotBtn = document.getElementById('toggle-spot-mode-btn');
+    const spotCountEl = document.getElementById('spot-count');
+    const vehicleStatusEl = document.getElementById('vehicle-status');
+    const logEl = document.getElementById('log');
+
+    function log(msg) {
+        logEl.innerText += msg + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    // --- 1. Parking Spots ---
+    
+    toggleSpotBtn.addEventListener('click', () => {
+        isSpotMode = !isSpotMode;
+        toggleSpotBtn.innerText = `点击地图设定停车点: ${isSpotMode ? '开' : '关'}`;
+        toggleSpotBtn.style.backgroundColor = isSpotMode ? '#28a745' : '#007bff';
     });
 
-    const endIcon = new L.Icon({
-        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-        iconSize: [25, 41],
-        iconAnchor: [12, 41],
-        popupAnchor: [1, -34],
-        shadowSize: [41, 41]
-    });
-
-    map.on('click', function(e) {
-        if (!startMarker) {
-            startMarker = L.marker(e.latlng, {icon: startIcon}).addTo(map).bindPopup("起点").openPopup();
-            statusText.innerHTML = "已选择起点，请点击选择<b>终点</b>";
-        } else if (!endMarker) {
-            endMarker = L.marker(e.latlng, {icon: endIcon}).addTo(map).bindPopup("终点").openPopup();
-            statusText.innerHTML = "起点和终点已就绪，请点击<b>规划路径</b>";
-            planBtn.disabled = false;
+    map.on('click', (e) => {
+        if (isSpotMode) {
+            addParkingSpot(e.latlng);
         }
     });
 
-    resetBtn.addEventListener('click', function() {
-        if (startMarker) map.removeLayer(startMarker);
-        if (endMarker) map.removeLayer(endMarker);
-        if (routePolyline) map.removeLayer(routePolyline);
-        startMarker = null;
-        endMarker = null;
-        routePolyline = null;
-        planBtn.disabled = true;
-        statusText.innerHTML = "请在地图上点击选择<b>起点</b>";
-    });
-
-    planBtn.addEventListener('click', function() {
-        if (!startMarker || !endMarker) return;
-
-        statusText.textContent = "正在规划路径...";
-        planBtn.disabled = true;
-
-        const origin = `${startMarker.getLatLng().lng.toFixed(6)},${startMarker.getLatLng().lat.toFixed(6)}`;
-        const destination = `${endMarker.getLatLng().lng.toFixed(6)},${endMarker.getLatLng().lat.toFixed(6)}`;
-
-        fetch('/plan_route', {
+    function addParkingSpot(latlng) {
+        fetch('/api/spots', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ origin, destination }),
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({lat: latlng.lat, lng: latlng.lng})
         })
-        .then(response => response.json())
+        .then(res => res.json())
         .then(data => {
-            if (data.success) {
-                if (routePolyline) map.removeLayer(routePolyline);
-                
-                routePolyline = L.polyline(data.path, {color: 'blue', weight: 5}).addTo(map);
-                map.fitBounds(routePolyline.getBounds());
-                
-                const distKm = (parseInt(data.distance) / 1000).toFixed(1);
-                const durationMin = Math.ceil(parseInt(data.duration) / 60);
-                statusText.innerHTML = `规划成功! 距离: <b>${distKm} km</b>, 预计耗时: <b>${durationMin} 分钟</b>`;
-            } else {
-                statusText.textContent = "规划失败: " + (data.error || "未知错误");
+            if(data.success) {
+                parkingSpots.push(data.spot);
+                renderSpot(data.spot);
+                updateSpotCount();
+                log(`已添加停车点 #${data.spot.id}`);
             }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            statusText.textContent = "请求出错，请重试";
-        })
-        .finally(() => {
-            planBtn.disabled = false;
+        });
+    }
+    
+    function renderSpot(spot) {
+        const icon = L.divIcon({
+            className: 'custom-div-icon',
+            html: `<div style='background-color:blue; width:12px; height:12px; border-radius:50%; border:2px solid white;'></div>`,
+            iconSize: [12, 12],
+            iconAnchor: [6, 6]
+        });
+        L.marker([spot.lat, spot.lng], {icon: icon})
+            .bindPopup(`<b>停车点 #${spot.id}</b>`)
+            .addTo(spotLayer);
+    }
+
+    function updateSpotCount() {
+        spotCountEl.innerText = `当前停车点: ${parkingSpots.length}`;
+    }
+
+    document.getElementById('clear-spots-btn').addEventListener('click', () => {
+        fetch('/api/spots/clear', {method: 'POST'})
+        .then(res => res.json())
+        .then(() => {
+            parkingSpots = [];
+            spotLayer.clearLayers();
+            updateSpotCount();
+            log('停车点已清空');
         });
     });
-</script>
 
+    // --- 2. Vehicles ---
+
+    document.getElementById('add-vehicle-btn').addEventListener('click', () => {
+        const count = document.getElementById('vehicle-count-input').value;
+        const capacity = document.getElementById('vehicle-capacity-input').value;
+        
+        fetch('/api/vehicles', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({count: count, capacity: capacity})
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.success) {
+                data.vehicles.forEach(v => vehicles.push(v));
+                updateVehicleStatus();
+                log(`已添加 ${count} 辆车 (载荷 ${capacity})`);
+            }
+        });
+    });
+
+    document.getElementById('clear-vehicles-btn').addEventListener('click', () => {
+        fetch('/api/vehicles/clear', {method: 'POST'})
+        .then(res => res.json())
+        .then(() => {
+            vehicles = [];
+            updateVehicleStatus();
+            log('车辆已清空');
+        });
+    });
+
+    function updateVehicleStatus() {
+        vehicleStatusEl.innerText = `车辆: ${vehicles.length} (未调度)`;
+    }
+
+    // --- 3. Outage Heatmap ---
+
+    document.getElementById('gen-outage-btn').addEventListener('click', () => {
+        log("正在生成断电模拟数据...");
+        fetch('/api/heatmap/outage/generate', {method: 'POST'})
+        .then(res => res.json())
+        .then(data => {
+            if(data.success) {
+                drawOutageHeatmap(data.data);
+                log("断电概率热力图已更新");
+            }
+        });
+    });
+
+    function drawOutageHeatmap(points) {
+        if (outageHeatLayer) map.removeLayer(outageHeatLayer);
+        // Format: [lat, lng, intensity]
+        // Leaflet.heat uses [lat, lng, intensity]
+        outageHeatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 13, gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}});
+        
+        if(document.getElementById('show-outage-check').checked) {
+            outageHeatLayer.addTo(map);
+        }
+    }
+
+    document.getElementById('show-outage-check').addEventListener('change', (e) => {
+        if(!outageHeatLayer) return;
+        if(e.target.checked) map.addLayer(outageHeatLayer);
+        else map.removeLayer(outageHeatLayer);
+    });
+
+    // --- 4. Optimization ---
+
+    document.getElementById('optimize-btn').addEventListener('click', () => {
+        if(parkingSpots.length === 0) { alert("请先设定停车点"); return; }
+        if(vehicles.length === 0) { alert("请先添加电力车"); return; }
+
+        log("正在计算最优调度方案...");
+        const mode = document.getElementById('algo-mode').value;
+        
+        fetch('/api/optimize', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({mode: mode})
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.success) {
+                log("调度计算完成!");
+                applyAssignments(data.assignments);
+                loadSupportHeatmap();
+            } else {
+                log("错误: " + data.error);
+            }
+        });
+    });
+
+    function applyAssignments(assignments) {
+        // Visual feedback: markers turn green or show vehicle info
+        // Clear old markers and redraw with vehicle counts?
+        // For now, let's just update the log and maybe popup content
+        let assignedCount = Object.keys(assignments).length;
+        vehicleStatusEl.innerText = `车辆: ${vehicles.length} (已调度 ${assignedCount})`;
+        
+        // Show simple summary
+        log(`已分配 ${assignedCount} 辆车到停车点`);
+    }
+
+    function loadSupportHeatmap() {
+        fetch('/api/heatmap/support')
+        .then(res => res.json())
+        .then(data => {
+            drawSupportHeatmap(data.data);
+        });
+    }
+
+    function drawSupportHeatmap(points) {
+        if (supportHeatLayer) map.removeLayer(supportHeatLayer);
+        // Different color gradient for support (e.g., Yellow/Orange)
+        supportHeatLayer = L.heatLayer(points, {
+            radius: 30, blur: 20, maxZoom: 13, 
+            gradient: {0.4: 'cyan', 0.6: 'yellow', 1: 'orange'}
+        });
+        
+        if(document.getElementById('show-support-check').checked) {
+            supportHeatLayer.addTo(map);
+        }
+    }
+    
+    document.getElementById('show-support-check').addEventListener('change', (e) => {
+        if(!supportHeatLayer) return;
+        if(e.target.checked) map.addLayer(supportHeatLayer);
+        else map.removeLayer(supportHeatLayer);
+    });
+
+</script>
 </body>
 </html>
