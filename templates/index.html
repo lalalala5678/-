@@ -212,7 +212,7 @@
         if (outageHeatLayer) map.removeLayer(outageHeatLayer);
         // Format: [lat, lng, intensity]
         // Leaflet.heat uses [lat, lng, intensity]
-        outageHeatLayer = L.heatLayer(points, {radius: 25, blur: 15, maxZoom: 13, gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}});
+        outageHeatLayer = L.heatLayer(points, {radius: 40, blur: 30, maxZoom: 13, gradient: {0.4: 'blue', 0.65: 'lime', 1: 'red'}});
         
         if(document.getElementById('show-outage-check').checked) {
             outageHeatLayer.addTo(map);
@@ -274,7 +274,7 @@
         if (supportHeatLayer) map.removeLayer(supportHeatLayer);
         // Different color gradient for support (e.g., Yellow/Orange)
         supportHeatLayer = L.heatLayer(points, {
-            radius: 30, blur: 20, maxZoom: 13, 
+            radius: 45, blur: 35, maxZoom: 13, 
             gradient: {0.4: 'cyan', 0.6: 'yellow', 1: 'orange'}
         });
         

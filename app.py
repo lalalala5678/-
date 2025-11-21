@@ -30,7 +30,7 @@ SHIJIAZHUANG_BOUNDS = {
     'min_lat': 37.9, 'max_lat': 38.2,
     'min_lng': 114.3, 'max_lng': 114.7
 }
-GRID_SIZE = 50 # 50x50 grid for heatmaps
+GRID_SIZE = 100 # Increased resolution to prevent heatmap striping artifacts
 
 # Outage Heatmap (Stored as a list of [lat, lng, intensity])
 outage_heatmap_data = []
@@ -128,20 +128,30 @@ def generate_outage_heatmap():
         })
     
     grid = generate_grid_points()
-    data = []
+    raw_data = []
     
+    # First pass: Calculate raw values
     for point in grid:
         val = 0
         for blob in blobs:
             dist_sq = (point['lat'] - blob['lat'])**2 + (point['lng'] - blob['lng'])**2
             val += blob['intensity'] * np.exp(-dist_sq / (2 * blob['sigma']**2))
-        
-        # Normalize simply for display (0-1 range roughly, though heatmaps handle higher)
-        if val > 0.01: # Optimization: ignore very low values
-             data.append([point['lat'], point['lng'], float(val)])
+        raw_data.append({'lat': point['lat'], 'lng': point['lng'], 'val': val})
+    
+    # Second pass: Find max for normalization
+    max_val = max([d['val'] for d in raw_data]) if raw_data else 1.0
+    if max_val == 0: max_val = 1.0
+    
+    # Third pass: Normalize and scale down
+    final_data = []
+    for item in raw_data:
+        # Normalize to 0-1 then scale down by 0.6 to avoid visual saturation
+        normalized_val = (item['val'] / max_val) * 0.6 
+        if normalized_val > 0.01:
+             final_data.append([item['lat'], item['lng'], float(normalized_val)])
             
-    outage_heatmap_data = data
-    return jsonify({'success': True, 'data': data})
+    outage_heatmap_data = final_data
+    return jsonify({'success': True, 'data': final_data})
 
 @app.route('/api/heatmap/outage', methods=['GET'])
 def get_outage_heatmap():
@@ -177,6 +187,9 @@ def optimize_dispatch():
     # because those are the "demand" points.
     for p in outage_heatmap_data:
         grid_points.append({'lat': p[0], 'lng': p[1]})
+        # Note: outage_heatmap_data is already scaled down by 0.6. 
+        # We should probably use the relative values for optimization or revert scaling?
+        # For optimization loss function, relative shape matters most.
         outage_values.append(p[2])
         
     outage_arr = np.array(outage_values)
@@ -293,9 +306,9 @@ def get_support_heatmap():
         
     # Format for heatmap [lat, lng, intensity]
     # Normalize to match outage intensity range roughly for visual comparison
-    # Or just return raw normalized
+    # Scale down by 0.7 for visual balance with high density grid
     if total_support.max() > 0:
-        total_support = total_support / total_support.max()
+        total_support = (total_support / total_support.max()) * 0.7
         
     data = []
     for i, val in enumerate(total_support):
