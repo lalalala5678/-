@@ -74,8 +74,9 @@ class DispatchAlgorithm:
                 )
                 
                 # 载荷越大，支援半径和强度越大
-                # 距离单位是 km
-                support += v['load'] / (dist**2 + 0.1)
+                # 修改为负指数衰减: load * exp(-dist * k)
+                # 系数 k=1，衰减非常慢，使热力图呈现连片效果
+                support += v['load'] * math.exp(-dist)
             
             cell['supportValue'] = support
         
@@ -114,66 +115,110 @@ class DispatchAlgorithm:
                 })
         return points
 
+    def get_outage_heat_points(self):
+        """获取前端渲染用的断电概率热力点 (基于网格)"""
+        points = []
+        for cell in self.grid:
+            if cell['outageProb'] > 0.001:
+                points.append({
+                    'lng': cell['lng'],
+                    'lat': cell['lat'],
+                    'count': cell['outageProb'] * 100
+                })
+        return points
+
     def find_best_spots(self, vehicles, parking_spots):
         """
-        寻找最优停车点 - 使用高德 API 计算真实驾车距离
+        寻找最优停车点 - 迭代贪心策略
+        每一辆车选择能使当前总损失函数最小的停车点
         """
         if not parking_spots:
             return vehicles, 0, []
 
-        # 简单的贪心分配：每辆车去最近的且还没被占用的停车点（这里简化为可重复停）
-        # 为了演示 API 接入，我们将计算车辆当前位置(如果已知)到所有停车点的真实距离
-        # 但由于车辆初始位置通常未知(为 None)，我们这里模拟：
-        # 假设我们想要将车辆分配到能最大化覆盖高风险区域的停车点
+        # 1. 按载荷从大到小排序，优先安排大车
+        sorted_vehicles = sorted(vehicles, key=lambda v: v['load'], reverse=True)
         
-        # 由于这是一个复杂的组合优化问题，我们这里采用简化策略：
-        # 1. 找出断电概率最高的几个网格点 (Hotspots)
-        # 2. 计算每个停车点到这些 Hotspots 的距离 (这里可以用直线距离近似，或者 API)
-        # 3. 优先选择离 Hotspot 近的停车点
+        # 用于存储已分配好位置的车辆
+        placed_vehicles = []
         
-        # 第一步：找到最热的区域中心 (重心)
-        max_prob_cell = max(self.grid, key=lambda c: c['outageProb'])
-        hotspot_center = {'lng': max_prob_cell['lng'], 'lat': max_prob_cell['lat']}
-        
-        # 第二步：计算所有停车点到热点中心的真实驾车距离 (调用高德 API)
-        # 注意：这会产生 len(parking_spots) 次 API 调用
-        spot_scores = []
-        for spot in parking_spots:
-            # 调用 API 计算停车点到热点中心的距离
-            # 注意：API返回的是米，转换成公里以匹配算法量级
-            dist_meter = get_driving_distance(spot, hotspot_center)
-            
-            if dist_meter is not None:
-                dist_km = dist_meter / 1000.0
-            else:
-                # 降级为直线距离
-                dist_km = self.calculate_distance(spot, hotspot_center)
-            
-            # 距离越近，分数越高
-            score = 1 / (dist_km + 0.1)
-            spot_scores.append({'spot': spot, 'score': score})
-            
-        # 按分数排序
-        spot_scores.sort(key=lambda x: x['score'], reverse=True)
-        
-        # 第三步：分配车辆
-        optimized_vehicles = []
-        for i, v in enumerate(vehicles):
-            # 轮询分配给最好的几个停车点
-            best_spot = spot_scores[i % len(spot_scores)]['spot']
-            
-            new_v = v.copy()
-            new_v['lat'] = best_spot['lat']
-            new_v['lng'] = best_spot['lng']
-            new_v['status'] = 'busy'
-            optimized_vehicles.append(new_v)
-        
-        # 计算新布局下的指标
-        self.calculate_total_support(optimized_vehicles)
-        loss = self.calculate_loss()
+        # 当前最佳状态的网格缓存 (初始状态为0)
+        # 为了优化性能，我们不每次都重新计算所有已分配车辆的支援值
+        # 而是维护一个 accumulation grid，每确定一辆车就叠加它的贡献
+        current_support_grid = [0] * len(self.grid)
+
+        # 预计算：所有停车点到所有网格的距离衰减系数
+        # 格式: { spot_index: [ factor_for_cell_0, factor_for_cell_1, ... ] }
+        # 这样在循环中就不必重复计算距离了
+        spot_decay_factors = {}
+        for idx, spot in enumerate(parking_spots):
+            factors = []
+            for cell in self.grid:
+                # 这里暂时使用直线距离以保证计算速度
+                # 如果必须用 API 驾车距离，那2500个网格点 * 停车点数会导致 API 请求爆炸
+                # 建议：网格计算维持直线距离，仅在最终确认停车点可行性时考虑 API
+                dist = self.calculate_distance(spot, {'lng': cell['lng'], 'lat': cell['lat']})
+                # 支援模型: load * exp(-dist)
+                # 保持与 calculate_total_support 一致
+                factor = math.exp(-dist)
+                factors.append(factor)
+            spot_decay_factors[idx] = factors
+
+        # 开始逐个分配车辆
+        for vehicle in sorted_vehicles:
+            best_spot = None
+            min_loss = float('inf')
+            best_support_contribution = [] # 暂存该车在最佳点的贡献值数组
+
+            # 尝试每一个停车点
+            for spot_idx, spot in enumerate(parking_spots):
+                # 计算假设把车停在这里，产生的总支援分布
+                # New = Current + Vehicle_Contribution
+                trial_support_values = []
+                contribution = []
+                load = vehicle['load']
+                
+                for i in range(len(self.grid)):
+                    val = load * spot_decay_factors[spot_idx][i]
+                    contribution.append(val)
+                    trial_support_values.append(current_support_grid[i] + val)
+                
+                # 计算 Loss
+                # 注意：需要先归一化 trial_support_values
+                # 为了性能，我们只针对 trial_support_values 做临时归一化
+                max_val = max(trial_support_values) if trial_support_values else 1
+                min_val = min(trial_support_values) if trial_support_values else 0
+                rng = max_val - min_val if max_val != min_val else 1
+                
+                trial_loss = 0
+                for i in range(len(self.grid)):
+                    norm_support = (trial_support_values[i] - min_val) / rng
+                    # 网格本身的 outageProb 已经是归一化过的 (在 map_outage_to_grid 中)
+                    diff = self.grid[i]['outageProb'] - norm_support
+                    trial_loss += diff**2
+                
+                if trial_loss < min_loss:
+                    min_loss = trial_loss
+                    best_spot = spot
+                    best_support_contribution = contribution
+
+            # 找到该车的最佳位置后，确定分配
+            if best_spot:
+                new_v = vehicle.copy()
+                new_v['lat'] = best_spot['lat']
+                new_v['lng'] = best_spot['lng']
+                new_v['status'] = 'busy'
+                placed_vehicles.append(new_v)
+                
+                # 更新累积网格状态
+                for i in range(len(current_support_grid)):
+                    current_support_grid[i] += best_support_contribution[i]
+
+        # 所有车辆分配完毕，重新计算一次最终状态以更新 algorithm 内部的 grid
+        self.calculate_total_support(placed_vehicles)
+        final_loss = self.calculate_loss()
         support_heatmap = self.get_support_heat_points()
         
-        return optimized_vehicles, loss, support_heatmap
+        return placed_vehicles, final_loss, support_heatmap
 
 # 全局单例实例
 dispatch_algorithm = DispatchAlgorithm()

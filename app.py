@@ -11,10 +11,12 @@ app = Flask(__name__)
 @app.route('/api/outage-heatmap', methods=['GET'])
 def route_outage_heatmap():
     """获取断电概率热力图"""
-    data = get_outage_heatmap()
-    # 同时在后端初始化/更新网格数据，为后续计算做准备
-    dispatch_algorithm.map_outage_to_grid(data)
-    return jsonify(data)
+    raw_data = get_outage_heatmap()
+    # 1. 将原始数据映射到算法网格
+    dispatch_algorithm.map_outage_to_grid(raw_data)
+    # 2. 返回网格化的数据，确保前端显示的分辨率与算法一致
+    grid_data = dispatch_algorithm.get_outage_heat_points()
+    return jsonify(grid_data)
 
 @app.route('/api/optimize', methods=['POST'])
 def route_optimize():
