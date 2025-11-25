@@ -2,11 +2,25 @@ from flask import Flask, jsonify, request
 from backend.service import get_outage_heatmap
 from backend.algorithm import dispatch_algorithm
 from backend.gaode_api import get_driving_distance
+from backend.scheduler import run_schedule
 
 app = Flask(__name__)
 
 # 注意：前端使用 Vite 代理 (proxy) 转发 /api 请求到 5000 端口
 # 因此这里不需要配置 CORS，除非前端和后端部署在不同域名下
+
+@app.route('/api/schedule-deterministic', methods=['POST'])
+def route_schedule_deterministic():
+    """确定性停电调度"""
+    data = request.json
+    # data 结构: { tasks: [...], vehicles: [...], depots: [...] }
+    if not data:
+        return jsonify({'status': 'error', 'message': 'Empty body'}), 400
+        
+    result = run_schedule(data)
+    if result.get('status') == 'error':
+        return jsonify(result), 400
+    return jsonify(result)
 
 @app.route('/api/outage-heatmap', methods=['GET'])
 def route_outage_heatmap():
