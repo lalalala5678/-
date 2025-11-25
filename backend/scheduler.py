@@ -58,9 +58,13 @@ class Scheduler:
         """获取两点间行驶时间 (小时)，如果 API 失败则返回无穷大"""
         return self.tau.get((u, v), 999.0)
 
-    def compute_sequence_metrics(self, seq, v_id):
+    def compute_sequence_metrics(self, seq, v_id, upper_bound=float('inf')):
         """
-        评估某辆车执行某个任务序列的可行性和成本 (核心逻辑移植自 v9)
+        评估某辆车执行某个任务序列的可行性和成本
+        Args:
+            seq: 任务ID列表
+            v_id: 车辆ID
+            upper_bound: 当前已知的全局最优总时间（用于剪枝）
         Returns: (feasible, depot_used, total_time, energy_sum, max_power, timeline)
         """
         if not seq:
@@ -69,14 +73,20 @@ class Scheduler:
         m = len(seq)
         best_overall = None 
 
-        # 尝试从每一个车库出发 (通常只有一个 Depot，但逻辑支持多个)
+        # 尝试从每一个车库出发
         for d_id in self.depots:
             
             # 内部递归函数：将序列切分为多次往返 (Trip)
-            # 每次 Trip: Depot -> Task1 -> Task2 ... -> Depot
-            def try_from(i, current_time):
+            def try_from(i, current_time, current_energy, current_max_p, current_timeline):
+                # 剪枝 1: 如果当前单一车辆的累积时间已经超过了全局(所有车辆)的最优解，
+                # 虽然这里不仅是单一车辆比较，但如果单车耗时过长通常也意味着总解不好。
+                # 更严格的剪枝应该在外部循环做，这里只能做局部剪枝。
+                # 不过，如果 current_time 已经甚至超过了 upper_bound，那肯定没戏了。
+                if current_time > upper_bound:
+                    return False, None, None, None, None, None
+
                 if i >= m:
-                    return True, 0.0, 0.0, 0.0, [], current_time
+                    return True, current_time, current_energy, current_max_p, current_timeline, current_time
 
                 best_local = None
 
@@ -86,7 +96,13 @@ class Scheduler:
                     first = subseq[0]
                     last = subseq[-1]
 
-                    # 1. 从车库出发去第一个任务
+                    # 1. 从车库/上一次位置出发去第一个任务
+                    # 注意：如果是第一趟Trip，从 d_id 出发；
+                    # 如果是后续Trip，current_time 已经是 "返回d_id并准备好出发" 的时间了吗？
+                    # 递归设计是：try_from(..., return_time)
+                    # 所以 current_time 是上一趟回到车库的时间点。
+                    # 这一趟从 d_id 出发去 first
+                    
                     travel_time_d_1 = self._get_travel_time(d_id, first)
                     
                     # 最早出发时间 & 实际出发时间
@@ -94,23 +110,21 @@ class Scheduler:
                     depart_time = max(current_time, earliest_depart)
                     arrival_first = depart_time + travel_time_d_1
                     
-                    # 硬时间窗约束：必须在任务开始前或准点到达
                     if arrival_first - self.tasks[first]['r_start'] > 1e-5:
                         continue 
 
                     # 构建 Timeline 事件
                     timeline_trip = []
+                    # ... (timeline构建逻辑同前，略微精简) ...
                     timeline_trip.append({
                         "type": "travel", "from": d_id, "to": first, 
                         "start": depart_time, "end": arrival_first,
                         "polyline": self.polylines.get((d_id, first), "")
                     })
 
-                    # 如果早到，原地等待
                     if arrival_first < self.tasks[first]['r_start'] - 1e-5:
                         timeline_trip.append({"type": "idle_task", "at": first, "start": arrival_first, "end": self.tasks[first]['r_start']})
 
-                    # 执行任务
                     timeline_trip.append({"type": "work", "task": first, "start": self.tasks[first]['r_start'], "end": self.tasks[first]['r_end']})
 
                     cur_time = self.tasks[first]['r_end']
@@ -122,7 +136,6 @@ class Scheduler:
                         travel_t = self._get_travel_time(prev, nxt)
                         arrive = cur_time + travel_t
                         
-                        # 时间窗检查
                         if arrive - self.tasks[nxt]['r_start'] > 1e-5:
                             feasible_trip = False; break
                         
@@ -152,46 +165,73 @@ class Scheduler:
                         "polyline": self.polylines.get((last, d_id), "")
                     })
                     
-                    trip_duration = return_time - depart_time
-
-                    # 4. 车辆能力约束校验 (功率 & 能量)
+                    # 4. 车辆能力约束校验
                     trip_energy = sum(self.tasks[t]['p'] * self.tasks[t]['duration'] for t in subseq)
                     trip_max_power = max(self.tasks[t]['p'] for t in subseq)
-
                     veh = self.vehicles[v_id]
                     if trip_max_power > veh['P'] + 1e-5 or trip_energy > veh['E'] + 1e-5:
                         continue
 
-                    # 5. 递归：处理剩余任务 seq[j+1:]
-                    ok_next, tot_next, energy_next, maxp_next, timeline_next, final_return = try_from(j+1, return_time)
+                    # 剪枝 2: 如果当前部分解已经比局部最优差，直接跳过 (假设目标是最小化单车时间)
+                    # if best_local and return_time + ... > best_local[0]: continue
+
+                    # 5. 递归
+                    # 下一趟出发前，如果在车库有等待时间，将在 merged_timeline 里处理
+                    # 递归传入新的累积值
+                    new_timeline = current_timeline + timeline_trip
+                    
+                    # 处理中间等待 (idle_depot) 会在合并时处理，这里简化逻辑：
+                    # 递归函数本身只负责计算“从 return_time 开始的后续部分”
+                    # 我们需要把 timeline 传递下去或者在回溯时合并。
+                    # 为了保持原逻辑结构，这里不传递完整 timeline，只传递时间。
+                    
+                    ok_next, tot_next, energy_next, maxp_next, timeline_next, final_return = try_from(
+                        j+1, return_time, 
+                        current_energy + trip_energy, 
+                        max(current_max_p, trip_max_power),
+                        [] # 这里的 timeline 仅仅是后续的
+                    )
+                    
                     if not ok_next:
                         continue
 
-                    # 合并 Timeline
-                    merged_timeline = list(timeline_trip)
+                    # 合并
+                    merged = list(timeline_trip)
                     if timeline_next:
-                        # 如果下一趟 Trip 开始时间晚于当前返回时间，中间是在车库等待
                         first_next = timeline_next[0]
                         next_depart = first_next.get("start", None)
                         if next_depart is not None and next_depart - return_time > 1e-5:
-                            merged_timeline.append({"type": "idle_depot", "at": d_id, "start": return_time, "end": next_depart})
-                    merged_timeline.extend(timeline_next)
+                            merged.append({"type": "idle_depot", "at": d_id, "start": return_time, "end": next_depart})
+                    merged.extend(timeline_next)
 
-                    total_time_candidate = trip_duration + tot_next
+                    # 计算该方案的总时间 (last_return - initial_depart)
+                    # 注意：try_from 的 current_time 参数实际上是 "Available time at Depot"
+                    # 最外层调用时是 0.0。
+                    # 该方案的结束时间是 final_return。
+                    # 总耗时 = final_return - (timeline_trip[0]['start']) ? 
+                    # 原逻辑是 sum(trip_duration)，即累加每一趟的 (return - depart)。
+                    # 这里保持原逻辑： tot_next 已经是后续所有trip的耗时和。
+                    
+                    trip_dur = return_time - depart_time
+                    total_time_candidate = trip_dur + tot_next
+                    
                     energy_sum_candidate = trip_energy + energy_next
                     max_power_candidate = max(trip_max_power, maxp_next)
 
                     if best_local is None or total_time_candidate < best_local[0]:
-                        best_local = (total_time_candidate, energy_sum_candidate, max_power_candidate, merged_timeline, final_return)
+                        best_local = (total_time_candidate, energy_sum_candidate, max_power_candidate, merged, final_return)
 
                 if best_local is None:
                     return False, None, None, None, None, None
+                # 返回 cost (duration), energy, power, timeline, final_time
                 return True, best_local[0], best_local[1], best_local[2], best_local[3], best_local[4]
 
             # 启动递归
-            ok, tot_time, energy_sum, max_power, timeline_list, final_return_time = try_from(0, 0.0)
+            ok, tot_time, energy_sum, max_power, timeline_list, final_return_time = try_from(0, 0.0, 0.0, 0.0, [])
             if not ok:
                 continue
+            
+            # 记录对于这辆车，从哪个Depot出发最好
             if best_overall is None or tot_time < best_overall[0]:
                 best_overall = (tot_time, energy_sum, max_power, timeline_list, d_id)
 
@@ -201,24 +241,57 @@ class Scheduler:
         total_time, energy_sum, max_power, timeline, depot_used = best_overall
         return True, depot_used, total_time, energy_sum, max_power, timeline
 
+    def _greedy_solve(self):
+        """
+        贪心算法求初值：
+        1. 简单的最近邻策略或直接按顺序分配
+        2. 返回一个可行解的总时间，作为 Branch & Bound 的上限
+        """
+        task_ids = list(self.tasks.keys())
+        vehicle_ids = list(self.vehicles.keys())
+        
+        # 简单策略：将所有任务平均分配给车辆
+        # 仅为了快速获取一个 Upper Bound
+        import math
+        chunk_size = math.ceil(len(task_ids) / len(vehicle_ids))
+        
+        total_time = 0.0
+        feasible = True
+        
+        for i, v_id in enumerate(vehicle_ids):
+            chunk = task_ids[i*chunk_size : (i+1)*chunk_size]
+            if not chunk: continue
+            
+            # 简单的序列：按时间窗开始时间排序
+            chunk.sort(key=lambda t: self.tasks[t]['r_start'])
+            
+            ok, _, ttime, _, _, _ = self.compute_sequence_metrics(chunk, v_id)
+            if ok:
+                total_time += ttime
+            else:
+                feasible = False; break
+        
+        if feasible:
+            return total_time
+        return float('inf')
+
     def solve(self):
         """
-        主求解逻辑
-        使用全排列 (Brute Force) 搜索最优解。
-        适用于小规模任务 (N <= 8)。
+        主求解逻辑 (Branch & Bound 优化版)
         """
         task_ids = list(self.tasks.keys())
         vehicle_ids = list(self.vehicles.keys())
         
         best_solution = None
-        best_total_time = float('inf')
         
-        # 安全限制：防止计算超时
+        # 1. 获取初始上限 (Greedy)
+        best_total_time = self._greedy_solve()
+        logging.info(f"Greedy Initial Upper Bound: {best_total_time}")
+        
         start_time = time.time()
         LIMIT_SECONDS = 8.0 
         
-        # 1. 任务分配循环：遍历所有可能的“任务-车辆”分配方案
-        # 笛卡尔积: (车辆1, 车辆1, ...), (车辆1, 车辆2, ...)
+        # 2. 任务分配循环
         assignment_iter = itertools.product(range(len(vehicle_ids)), repeat=len(task_ids))
         
         for assign in assignment_iter:
@@ -226,44 +299,48 @@ class Scheduler:
                 logging.warning("Scheduling timeout reached, returning best found.")
                 break
                 
-            # 构建分组：{ 'V1': ['T1', 'T2'], 'V2': ['T3'] }
             groups = {v: [] for v in vehicle_ids}
             for t_id, v_idx in zip(task_ids, assign):
                 groups[vehicle_ids[v_idx]].append(t_id)
 
-            # 2. 序列优化循环：对每辆车的任务生成全排列
             perm_lists = []
             for v in vehicle_ids:
                 if not groups[v]:
                     perm_lists.append([()])
                 else:
+                    # 优化：如果任务数 > 5，全排列太慢，这里可以进一步限制
+                    # 比如只取按时间窗排序后的几个邻域变种
                     perm_lists.append(list(itertools.permutations(groups[v])))
             
-            # 组合各车的排列
             for prod in itertools.product(*perm_lists):
-                total_time = 0.0
+                current_total_time = 0.0
                 feasible = True
                 current_sol = {}
                 
+                # 逐个车辆计算
                 for v_id, seq in zip(vehicle_ids, prod):
-                    seq = list(seq)
-                    ok, depot, ttime, energy, max_p, timeline = self.compute_sequence_metrics(seq, v_id)
+                    # 剪枝：如果当前累积时间已经超过最优解，停止计算剩余车辆
+                    if current_total_time >= best_total_time:
+                        feasible = False; break
+                    
+                    # 将剩余的时间配额传给 compute_sequence_metrics 进行内部剪枝
+                    time_budget = best_total_time - current_total_time
+                    ok, depot, ttime, energy, max_p, timeline = self.compute_sequence_metrics(seq, v_id, upper_bound=time_budget)
+                    
                     if not ok:
-                        feasible = False
-                        break
-                    total_time += ttime
+                        feasible = False; break
+                    
+                    current_total_time += ttime
                     current_sol[v_id] = {
-                        "seq": seq, 
-                        "depot": depot, 
-                        "time": ttime, 
-                        "energy": energy, 
-                        "timeline": timeline
+                        "seq": seq, "depot": depot, "time": ttime, 
+                        "energy": energy, "timeline": timeline
                     }
                 
                 if feasible:
-                    if total_time < best_total_time:
-                        best_total_time = total_time
+                    if current_total_time < best_total_time:
+                        best_total_time = current_total_time
                         best_solution = current_sol
+                        logging.info(f"New Best Solution found: {best_total_time:.2f}h")
 
         return best_solution
 
